@@ -786,24 +786,35 @@ document.addEventListener('keyup',e=>{
   }
 });
 
+let _djCooldownTicks=0;
+const DJ_MIN_TICKS=6;
+
 function handleJumpDown(){
-  if(!G.running)return;
-  /* Queue jump in buffer — consumed in physicsTick if on ground */
+  if(!G.running||!PL||PL.dead)return;
   _jumpBuffered=true;
   if(_jumpBufTimer)clearTimeout(_jumpBufTimer);
-  _jumpBufTimer=setTimeout(()=>{_jumpBuffered=false;},100); // 100 ms buffer window
+  _jumpBufTimer=setTimeout(()=>{_jumpBuffered=false;},100);
 
   const gd=gravFlip?-1:1;
-  if(modeNow===0){        // CUBE
-    if(PL.onGround){PL.vy=JUMP_V*gd;PL.onGround=false;PL.canDJ=true;_jumpBuffered=false;}
-    else if(PL.canDJ){PL.vy=JUMP_V*gd*0.9;PL.canDJ=false;_jumpBuffered=false;}
-  } else if(modeNow===1){ // SHIP — hold flag set in physicsTick
+  if(modeNow===0){
+    if(PL.onGround){
+      PL.vy=JUMP_V*gd;
+      PL.onGround=false;
+      PL.canDJ=true;
+      _djCooldownTicks=0;
+      _jumpBuffered=false;
+    } else if(PL.canDJ&&_djCooldownTicks>=DJ_MIN_TICKS){
+      PL.vy=JUMP_V*gd*0.75;
+      PL.canDJ=false;
+      _jumpBuffered=false;
+    }
+  } else if(modeNow===1){
     PL.holding=true;
-  } else if(modeNow===2){ // BALL — flip gravity
+  } else if(modeNow===2){
     gravFlip=!gravFlip;PL.vy=0;_jumpBuffered=false;
-  } else if(modeNow===3){ // WAVE — hold flag
+  } else if(modeNow===3){
     PL.holding=true;
-  } else if(modeNow===4){ // UFO — impulse
+  } else if(modeNow===4){
     PL.vy=UFO_BOOST*gd;_jumpBuffered=false;
   }
 }
@@ -844,7 +855,7 @@ function initRound(){
   levelCoins.forEach(c=>c.got=false);levelOrbs.forEach(o=>o.used=false);
   camX=0;camScrollOff=0;parallaxFarOff=0;parallaxMidOff=0;
   elapsed=0;lastRafTs=0;accumulator=0;modeNow=0;gravFlip=false;
-  _jumpActive=false;_jumpBuffered=false;
+  _jumpActive=false;_jumpBuffered=false;_djCooldownTicks=0;
 
   const H=canvasH,floorY=H-TILE;
   PL={
@@ -900,6 +911,12 @@ function physicsTick(){
     /* Player is visually locked at 20% of screen width — level scrolls past */
     START_X=Math.round(canvasW*0.20);
     PL.x=START_X;
+
+    /* Tick DJ cooldown so double-jump can only fire after being airborne long enough */
+    if(!PL.onGround&&PL.canDJ) _djCooldownTicks++;
+
+    /* Hard clamp: never let player go above y=2 regardless of velocity */
+    if(PL.y<2){PL.y=2;if(PL.vy<0)PL.vy=0;}
 
     /* Consume buffered jump when landing */
     if(_jumpBuffered&&PL.onGround&&modeNow===0){
