@@ -763,24 +763,30 @@ let _jumpBufTimer=null;
 function onJumpDown(e){
   e.preventDefault();
   document.getElementById('jump-btn').classList.add('pressed');
-  if(!G.running)return;
-  _jumpActive=true;handleJumpDown();
+  if(!G.running||!PL||PL.dead)return;
+  // Touch: always treat each pointerdown as a fresh independent tap.
+  // Do NOT gate on _jumpActive — that flag causes missed double-jumps on mobile
+  // where pointerup may not fire before the next pointerdown.
+  _jumpActive=true;
+  handleJumpDown();
 }
 function onJumpUp(e){
   e.preventDefault();
   document.getElementById('jump-btn').classList.remove('pressed');
-  if(!G.running)return;
-  _jumpActive=false;handleJumpUp();
+  _jumpActive=false;
+  if(!G.running||!PL||PL.dead)return;
+  handleJumpUp();
 }
 document.addEventListener('keydown',e=>{
   if(e.code==='Space'||e.code==='ArrowUp'||e.code==='KeyW'){
-    e.preventDefault();if(!G.running)return;
+    e.preventDefault();if(!G.running||!PL||PL.dead)return;
+    // Keyboard: guard with _jumpActive to prevent key-repeat firing jump spam
     if(!_jumpActive){_jumpActive=true;handleJumpDown();}
   }
 });
 document.addEventListener('keyup',e=>{
   if(e.code==='Space'||e.code==='ArrowUp'||e.code==='KeyW'){
-    _jumpActive=false;if(G.running)handleJumpUp();
+    _jumpActive=false;if(G.running&&PL&&!PL.dead)handleJumpUp();
   }
 });
 
@@ -790,7 +796,7 @@ function handleJumpDown(){
   if(!G.running||!PL||PL.dead)return;
   _jumpBuffered=true;
   if(_jumpBufTimer)clearTimeout(_jumpBufTimer);
-  _jumpBufTimer=setTimeout(()=>{_jumpBuffered=false;},100);
+  _jumpBufTimer=setTimeout(()=>{_jumpBuffered=false;},80);
 
   const gd=gravFlip?-1:1;
   if(modeNow===0){
