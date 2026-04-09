@@ -663,8 +663,8 @@ function buildLevel(diff,seed){
     tall_block:[{dc:0,dr:0,t:T.BLOCK},{dc:0,dr:1,t:T.BLOCK},{dc:0,dr:2,t:T.BLOCK}],
     stair:[{dc:0,dr:0,t:T.BLOCK},{dc:1,dr:0,t:T.BLOCK},{dc:1,dr:1,t:T.BLOCK},{dc:2,dr:0,t:T.BLOCK},{dc:2,dr:1,t:T.BLOCK},{dc:2,dr:2,t:T.BLOCK}],
     gap_spike:[{dc:1,dr:0,t:T.SPIKE},{dc:2,dr:0,t:T.SPIKE}],
-    ceil_spike:[{dc:0,dr:ROWS-1,t:T.CEIL_SPIKE}],
-    ceil_spike2:[{dc:0,dr:ROWS-1,t:T.CEIL_SPIKE},{dc:1,dr:ROWS-1,t:T.CEIL_SPIKE}],
+    ceil_spike:[{dc:0,dr:ROWS-2,t:T.CEIL_SPIKE}],
+    ceil_spike2:[{dc:0,dr:ROWS-2,t:T.CEIL_SPIKE},{dc:1,dr:ROWS-2,t:T.CEIL_SPIKE}],
   };
 
   let col=6;
@@ -729,8 +729,8 @@ function fitCanvas(){
   const ww=wrap.offsetWidth,wh=wrap.offsetHeight;
   let cw=ww,ch=Math.round(ww*9/16);
   if(ch>wh){ch=wh;cw=Math.round(wh*16/9);}
-  // Logical canvas size is divided by zoom factor so rendering is 1.5x larger
-  const ZOOM=1.5;
+  // Logical canvas size is divided by zoom factor so rendering is 1.2x larger
+  const ZOOM=1.2;
   canvasW=Math.round(cw/ZOOM);canvasH=Math.round(ch/ZOOM);
   canvas.width=cw*dpr;canvas.height=ch*dpr;
   canvas.style.width=cw+'px';canvas.style.height=ch+'px';
@@ -881,7 +881,7 @@ function gameLoop(ts){
 ═══════════════════════════════════════════════════════════════ */
 function physicsTick(){
   if(!G.running)return;
-  const W=canvasW,H=canvasH,floorY=H-TILE,ceilY=TILE*0.5;
+  const W=canvasW,H=canvasH,floorY=H-TILE,ceilY=4; // ceilY=4px: only kill if truly off-screen top
   const speed=DIFF[S.difficulty].speed;
 
   /* ── Scroll the level toward the player (stuck-bug: camera moves, player doesn't) ── */
@@ -928,7 +928,7 @@ function physicsTick(){
 ═══════════════════════════════════════════════════════════════ */
 function render(ts){
   if(!canvas||!ctx)return;
-  const W=canvasW,H=canvasH,floorY=H-TILE,ceilY=TILE*0.5;
+  const W=canvasW,H=canvasH,floorY=H-TILE,ceilY=4;
   ctx.clearRect(0,0,W,H);
   drawBackground(W,H);
   drawLevel(W,H,floorY);
@@ -964,20 +964,20 @@ function updatePlayerPhysics(p,H,floorY,ceilY){
   } else if(modeNow===1){  /* ── SHIP ── */
     if(p.holding)p.vy+=SHIP_THRUST*gd*3.5;else p.vy+=GRAVITY*gd*SHIP_GRAV;
     p.vy=clamp(p.vy,-9,9);p.y+=p.vy;
-    p.y=clamp(p.y,ceilY+2,floorY-28);p.onGround=false;
+    p.y=clamp(p.y,2,floorY-28);p.onGround=false;
   } else if(modeNow===2){  /* ── BALL ── */
     p.vy+=GRAVITY*gd*0.9;p.y+=p.vy;p.angle+=0.07*gd;
     landCheck(p,floorY,ceilY,gd);
   } else if(modeNow===3){  /* ── WAVE (45° diagonal) ── */
     p.vy=p.holding?-WAVE_SPD*gd:WAVE_SPD*gd;p.y+=p.vy;
-    p.y=clamp(p.y,ceilY+2,floorY-28);p.onGround=false;
+    p.y=clamp(p.y,2,floorY-28);p.onGround=false;
     p.angle+=p.holding?-0.12:0.12;
   } else if(modeNow===4){  /* ── UFO ── */
     p.vy+=GRAVITY*gd*UFO_GRAV;p.vy=clamp(p.vy,-9,9);p.y+=p.vy;
-    p.y=clamp(p.y,ceilY+2,floorY-28);p.onGround=false;
+    p.y=clamp(p.y,2,floorY-28);p.onGround=false;
   }
-  /* Ceiling kills for cube / ball */
-  if((modeNow===0||modeNow===2)&&!gravFlip&&p.y<=ceilY) killPlayer();
+  /* Ceiling kills for cube / ball — only if truly off-screen */
+  if((modeNow===0||modeNow===2)&&!gravFlip&&p.y<=-PSIZE) killPlayer();
   if((modeNow===0||modeNow===2)&& gravFlip&&p.y>=floorY-28) killPlayer();
 }
 
@@ -1013,6 +1013,7 @@ function checkCollision(p,H,floorY,ceilY){
     for(let r=0;r<ROWS;r++){
       const t=level[c]?.[r];if(!t)continue;
       const tx=c*TILE-camX, ty=H_pix-(r+1)*TILE;
+      if(ty<-TILE)continue; // tile is above the visible canvas, skip entirely
 
       if(t===T.BLOCK){
         if(aabb(hx,hy,hw,hh,tx,ty,TILE,TILE)){
@@ -1145,6 +1146,7 @@ function drawLevel(W,H,floorY){
     for(let r=0;r<ROWS;r++){
       const t=level[c]?.[r];if(!t)continue;
       const ty=H_pix-(r+1)*TILE;
+      if(ty<-TILE||ty>H_pix+TILE)continue; // skip tiles off-screen vertically
       if(t===T.BLOCK) drawBlock(tx,ty);
       else if(t===T.SPIKE) drawSpike(tx,ty,false);
       else if(t===T.CEIL_SPIKE) drawSpike(tx,ty,true);
