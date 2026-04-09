@@ -165,6 +165,10 @@ canvas{display:block;image-rendering:pixelated;}
 ::-webkit-scrollbar{width:5px;}
 ::-webkit-scrollbar-track{background:rgba(0,0,0,.3);}
 ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px;}
+.kick-btn{padding:3px 9px;border-radius:6px;border:1px solid var(--red);background:rgba(255,51,85,.12);
+  color:var(--red);font-size:10px;font-weight:900;cursor:pointer;letter-spacing:.5px;
+  transition:.15s;font-family:'Nunito',sans-serif;}
+.kick-btn:hover{background:rgba(255,51,85,.3);}
 </style>
 </head>
 <body>
@@ -407,6 +411,7 @@ const DIFF={
 const MODE_NAMES=['CUBE','SHIP','BALL','WAVE','UFO'];
 
 let S={name:'Player1',icon:'🟥',roomCode:'',isHost:false,totalRounds:3,currentRound:0,difficulty:'medium',players:[],selfIdx:0};
+let pendingJoin=null;
 let chosenDiff='medium';
 let attempt=1;
 
@@ -482,6 +487,10 @@ function onHostMsg(d){
   } else if(d.type==='ghost'){
     /* Relay ghost from another guest (host is middleman) */
     ghostData[d.peerId]={...d};
+  } else if(d.type==='kicked'){
+    if(hostConn){try{hostConn.close();}catch(e){} hostConn=null;}
+    goHome();
+    setTimeout(()=>alert('You were kicked from the lobby.'),200);
   } else if(d.type==='next_round'){
     d.scores.forEach((sc,i)=>{if(i<S.players.length)S.players[i].score=sc;});
     S.currentRound=d.round-1;startRound();
@@ -530,15 +539,58 @@ function uiCreate(){
 }
 function randCode(){const c='ABCDEFGHJKLMNPQRSTUVWXYZ2345679';return Array.from({length:6},()=>c[Math.floor(Math.random()*c.length)]).join('');}
 function addBot(i){S.players.push({name:BOTS[i%BOTS.length],icon:BICONS[i%BICONS.length],score:0,pct:0,alive:true,isBot:true,skill:0.3+Math.random()*0.7});}
+function kickPlayer(i){
+  const p=S.players[i];
+  if(!p||i===0)return; // can't kick host
+  if(p.isBot){
+    S.players.splice(i,1);
+    refreshLobbyUI();
+    document.getElementById('pCount').textContent=S.players.length;
+    broadcast({type:'lobby_update',players:S.players.map(p=>({name:p.name,icon:p.icon,isBot:p.isBot,peerId:p.peerId||null}))});
+    toast('🤖 Bot removed.');
+  } else {
+    // Find the connection for this peer
+    const conn=guestConns.find(c=>c.peer===p.peerId);
+    if(conn){try{conn.send({type:'kicked'});}catch(e){}}
+    // Remove from players list after brief delay
+    setTimeout(()=>{
+      S.players.splice(i,1);
+      if(conn){conn.close();guestConns=guestConns.filter(c=>c!==conn);}
+      refreshLobbyUI();
+      broadcast({type:'lobby_update',players:S.players.map(p=>({name:p.name,icon:p.icon,isBot:p.isBot,peerId:p.peerId||null}))});
+    },300);
+    toast('👢 '+p.name+' kicked.');
+  }
+}
 function refreshLobbyUI(){
   document.getElementById('pCount').textContent=S.players.length;
-  document.getElementById('pList').innerHTML=S.players.map((p,i)=>`
-    <div class="pl"><span class="pl-ic">${p.icon}</span><span>${p.name}</span>
-    ${p.isBot?'<span class="badge badge-bot">BOT</span>':''}
-    ${i===0?'<span class="badge badge-host">HOST</span>':''}
-    ${i===S.selfIdx&&i>0?'<span class="badge badge-you">YOU</span>':''}</div>`).join('');
+  document.getElementById('pList').innerHTML=S.players.map((p,i)=>{
+    const isMe=(i===S.selfIdx);
+    const showKick=S.isHost&&!isMe&&i>0;
+    return`<div class="pl">
+      <span class="pl-ic">${p.icon}</span>
+      <span style="flex:1">${p.name}</span>
+      ${p.isBot?'<span class="badge badge-bot">BOT</span>':''}
+      ${i===0?'<span class="badge badge-host">HOST</span>':''}
+      ${isMe&&i>0?'<span class="badge badge-you">YOU</span>':''}
+      <button class="kick-btn" style="display:${showKick?'block':'none'}" onclick="kickPlayer(${i})">KICK</button>
+    </div>`;
+  }).join('');
 }
-function uiJoin(){S.name=document.getElementById('pName').value.trim()||'Player1';S.icon=selIcon;S.isHost=false;showScreen('s-join');}
+function uiJoin(){
+  S.name=document.getElementById('pName').value.trim()||'Player1';
+  S.icon=selIcon;S.isHost=false;
+  if(pendingJoin){
+    // User already has a pending link join — prefill the code and go straight to join screen
+    document.getElementById('jCode').value=pendingJoin.toUpperCase();
+    showScreen('s-join');
+    // Auto-trigger join with the saved name
+    doJoin();
+    pendingJoin=null;
+  } else {
+    showScreen('s-join');
+  }
+}
 function doJoin(){
   const code=document.getElementById('jCode').value.toUpperCase().trim();
   if(code.length<4){showJoinErr('Enter the room code');return;}
@@ -594,7 +646,7 @@ function buildLevel(diff,seed){
   const rng=seededRng(seed||42);
   const dCfg={easy:{gap:5,orbs:true},medium:{gap:3,orbs:true},hard:{gap:2,orbs:false},insane:{gap:1,orbs:false}}[diff]||{gap:3,orbs:true};
 
-  const portalCols=[40,90,145,195,250,300];
+  const portalCols=[24,54,87,117,150,180]; // 40% closer spacing
   const portalModes=[T.PORTAL_SHIP,T.PORTAL_CUBE,T.PORTAL_BALL,T.PORTAL_WAVE,T.PORTAL_UFO,T.PORTAL_CUBE];
   portalCols.forEach((pc,i)=>{
     if(pc<LEVEL_TILES-10){
@@ -647,13 +699,22 @@ let elapsed;     // physics tick counter
 let botSims;
 
 /* Physics constants tuned to feel like GD */
-const GRAVITY=0.68;
-const JUMP_V=-13.5;
+const GRAVITY=0.476; // 30% lower than original 0.68 for floaty feel
+const JUMP_V=-11.3; // Proportionally reduced for same height, longer airtime with new gravity
 const SHIP_THRUST=-0.60;
 const SHIP_GRAV=0.38;
 const UFO_BOOST=-9.0;
 const UFO_GRAV=0.45;
 const WAVE_SPD=5.0;
+
+/* ── Portal turbo speed boost ── */
+let turboSpeedMult=1.0;  // 1.0 = normal, briefly 1.35 after portal hit
+let turboTimer=null;
+function activatePortalTurbo(){
+  turboSpeedMult=1.35;
+  if(turboTimer)clearTimeout(turboTimer);
+  turboTimer=setTimeout(()=>{turboSpeedMult=1.0;},2000);
+}
 
 /* ── Fixed time-step ── */
 const FIXED_DT_MS=1000/60;  // 16.667 ms
@@ -668,11 +729,13 @@ function fitCanvas(){
   const ww=wrap.offsetWidth,wh=wrap.offsetHeight;
   let cw=ww,ch=Math.round(ww*9/16);
   if(ch>wh){ch=wh;cw=Math.round(wh*16/9);}
-  canvasW=cw;canvasH=ch;
+  // Logical canvas size is divided by zoom factor so rendering is 1.5x larger
+  const ZOOM=1.5;
+  canvasW=Math.round(cw/ZOOM);canvasH=Math.round(ch/ZOOM);
   canvas.width=cw*dpr;canvas.height=ch*dpr;
   canvas.style.width=cw+'px';canvas.style.height=ch+'px';
   ctx=canvas.getContext('2d');
-  ctx.scale(dpr,dpr);
+  ctx.scale(dpr*ZOOM,dpr*ZOOM);
 }
 window.addEventListener('resize',()=>{if(G.running&&canvas)fitCanvas();});
 
@@ -691,7 +754,8 @@ let camScrollOff=0;     // foreground camera scroll
    The player can jump, flip gravity, use all game modes, and
    interact with orbs/coins — they just can't move forward.
 ═══════════════════════════════════════════════════════════════ */
-const START_X=80; // screen column where the player is frozen
+// Player X is always 20% of canvas width (set each tick)
+let START_X=80; // will be recalculated each tick to 20% canvasW
 
 /* ── Input buffering (100 ms window) ── */
 let _jumpActive=false;
@@ -784,7 +848,7 @@ function initRound(){
 
   const H=canvasH,floorY=H-TILE;
   PL={
-    x:START_X,   // ← stuck-bug: this never changes
+    x:Math.round(canvasW*0.20), // 20% of screen width
     y:floorY-28,
     vy:0,onGround:true,holding:false,dead:false,canDJ:false,angle:0,pct:0,
   };
@@ -822,7 +886,7 @@ function physicsTick(){
 
   /* ── Scroll the level toward the player (stuck-bug: camera moves, player doesn't) ── */
   if(!PL.dead){
-    camScrollOff=Math.min(camScrollOff+speed, levelW-W);
+    camScrollOff=Math.min(camScrollOff+speed*turboSpeedMult, levelW-W);
     camX=camScrollOff;
     /* Parallax layers move slower than the foreground */
     parallaxFarOff+=speed*0.15;   // far: 15 %
@@ -833,10 +897,8 @@ function physicsTick(){
     /* Player vertical physics */
     updatePlayerPhysics(PL,H,floorY,ceilY);
 
-    /* ══ STUCK BUG: Lock x position every tick ══
-       Even if any code path modified PL.x, this line
-       resets it immediately. The player CANNOT move right.
-       This is the intentional movement lockdown. */
+    /* Player is visually locked at 20% of screen width — level scrolls past */
+    START_X=Math.round(canvasW*0.20);
     PL.x=START_X;
 
     /* Consume buffered jump when landing */
@@ -973,6 +1035,7 @@ function checkCollision(p,H,floorY,ceilY){
             modeNow=nm;document.getElementById('hudMode').textContent=MODE_NAMES[modeNow];
             if(modeNow===0||modeNow===2){p.y=floorY-PSIZE;p.vy=0;p.onGround=true;}
             gravFlip=false;
+            activatePortalTurbo(); // snappy speed burst on mode change
           }
         }
       } else if(t===T.PORTAL_GRAV){
@@ -1003,8 +1066,9 @@ function killPlayer(){
   const H=canvasH,floorY=H-TILE;
   /* Reset player to start */
   PL.y=floorY-PSIZE;PL.vy=0;PL.onGround=true;PL.canDJ=false;PL.angle=0;
+  START_X=Math.round(canvasW*0.20);
   PL.x=START_X;
-  /* Reset scroll back to beginning (stuck-bug: world resets too) */
+  /* Reset scroll back to beginning */
   camScrollOff=0;camX=0;parallaxFarOff=0;parallaxMidOff=0;
   modeNow=0;gravFlip=false;
   document.getElementById('hudMode').textContent='CUBE';
@@ -1273,10 +1337,21 @@ function showFinal(){
 }
 function playAgain(){S.currentRound=0;S.players.forEach(p=>{p.score=0;p.pct=0;p.alive=true;});startRound();}
 
-/* URL auto-join */
+/* URL auto-join — save to pendingJoin, stay on home so user picks name first */
 (()=>{
   const p=new URLSearchParams(location.search),j=p.get('join');
-  if(j) setTimeout(()=>{document.getElementById('jCode').value=j.toUpperCase();showScreen('s-join');},400);
+  if(j){
+    pendingJoin=j.toUpperCase();
+    // Update the Join Lobby button text dynamically
+    const nameEl=document.getElementById('pName');
+    const joinBtn=document.querySelector('#s-home .btn:not(.btn-go)');
+    function updateJoinBtn(){
+      const nm=(nameEl?.value.trim()||'Player1');
+      if(joinBtn) joinBtn.textContent='🔗 Enter Lobby as '+nm;
+    }
+    if(nameEl) nameEl.addEventListener('input',updateJoinBtn);
+    updateJoinBtn();
+  }
 })();
 </script>
 </body>
